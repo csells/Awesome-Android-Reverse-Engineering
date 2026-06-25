@@ -1,0 +1,5 @@
+# Large binaries / build artifacts — keep notes & scripts, not the APK blobs
+apks/*.apk
+apks/*.xapk
+apks/*.apks
+*-work/

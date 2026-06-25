@@ -1,0 +1,24 @@
+{
+  "skill_name": "android-apk-roundtrip",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I've got cache/apks/uk.co.aifactory.backgammonfree.apk — decompile it into something I can edit and then recompile back into an installable APK, and prove the round-trip is faithful.",
+      "expected_output": "Decoded smali+resource tree produced; rebuilt+signed APK that passes apksigner verify (v1/v2/v3); verify step shows AndroidManifest IDENTICAL and all smali trees IDENTICAL or content-equivalent; honest explanation that bit-identical is impossible without the original key.",
+      "files": ["cache/apks/uk.co.aifactory.backgammonfree.apk"]
+    },
+    {
+      "id": 2,
+      "prompt": "Change the displayed app name of this Backgammon APK to something custom, rebuild it, and confirm the new name is actually baked into the rebuilt APK.",
+      "expected_output": "res/values/strings.xml app_name edited; apktool b + sign succeed; aapt2 dump badging on the rebuilt APK shows the new application-label.",
+      "files": ["cache/apks/uk.co.aifactory.backgammonfree.apk"]
+    },
+    {
+      "id": 3,
+      "prompt": "My rebuilt APK won't install — adb says INSTALL_FAILED_UPDATE_INCOMPATIBLE. What's wrong and how do I get it onto my emulator?",
+      "expected_output": "Explains signature mismatch vs the already-installed (differently-signed) build; instructs adb uninstall <package> then adb install of the debug-signed APK; references troubleshooting.md.",
+      "files": []
+    }
+  ],
+  "notes": "Validated end-to-end on the Backgammon APK 2026-06-25: roundtrip => apksigner verify OK (v1/v2/v3); re-decode diff => manifest + smali IDENTICAL/content-equivalent (only case-insensitive-FS filename suffixes differ); edit-label test => new label present in rebuilt APK badging."
+}

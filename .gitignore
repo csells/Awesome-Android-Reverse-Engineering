@@ -1,0 +1,7 @@
+# Large / regenerable reverse-engineering artifacts (kept local, not committed)
+decompiled/
+# Third-party tool binaries — re-downloadable, don't vendor into the repo
+cache/tools/*.jar
+# OS / editor cruft
+.DS_Store
+.vscode/
