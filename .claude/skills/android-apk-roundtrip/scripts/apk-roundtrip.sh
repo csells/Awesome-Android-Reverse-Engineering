@@ -169,16 +169,79 @@ cmd_roundtrip() {
   echo "signed:   $(ls "$wd"/signed/*.apk 2>/dev/null | grep -iv idsig | head -1)"
 }
 
+cmd_doctor() {
+  local missing_required=0
+  echo "apk-roundtrip doctor — checking dependencies for a fresh machine"
+  echo
+
+  if have java; then
+    echo "  [ok]       java         $(java -version 2>&1 | head -1 | sed 's/.*version //;s/\"//g')"
+  else
+    echo "  [MISSING]  java         REQUIRED — install a JDK 17+ (brew install openjdk)"
+    missing_required=1
+  fi
+
+  if have apktool; then
+    echo "  [ok]       apktool      $(apktool --version 2>&1)"
+  else
+    echo "  [MISSING]  apktool      REQUIRED — brew install apktool"
+    missing_required=1
+  fi
+
+  local bt
+  if bt="$(find_build_tools)"; then
+    echo "  [ok]       build-tools  $bt"
+  else
+    echo "  [MISSING]  build-tools  REQUIRED (apksigner/zipalign/aapt2) — install Android"
+    echo "                          command-line tools, then: sdkmanager \"build-tools;34.0.0\""
+    echo "                          Then set ANDROID_HOME, or BUILD_TOOLS=/path/to/build-tools/<ver>"
+    missing_required=1
+  fi
+
+  local uber
+  if uber="$(find_uber_signer)"; then
+    echo "  [ok]       uber-signer  $uber"
+  else
+    echo "  [optional] uber-signer  not found — OK, signing falls back to build-tools."
+    echo "                          To use it: download uber-apk-signer.jar from"
+    echo "                          github.com/patrickfav/uber-apk-signer and set UBER_SIGNER=/path"
+    echo "                          (or drop it at <repo>/cache/tools/uber-apk-signer.jar)."
+  fi
+
+  if have jadx; then echo "  [ok]       jadx         $(jadx --version 2>&1 | head -1)"
+  else echo "  [optional] jadx         read-only Java view for analysis — brew install jadx"; fi
+
+  if have d2j-dex2jar; then echo "  [ok]       dex2jar      present"
+  else echo "  [optional] dex2jar      DEX<->JAR helper — brew install dex2jar"; fi
+
+  if have apkeep; then echo "  [ok]       apkeep       present"
+  else echo "  [optional] apkeep       fetch APKs to test on — brew install apkeep"; fi
+
+  echo
+  if [[ $missing_required -eq 0 ]]; then
+    echo "All REQUIRED tools present — decode / build / sign / verify will work."
+    return 0
+  fi
+  echo "Missing REQUIRED tool(s) above. One-shot setup on macOS (Homebrew):"
+  echo "  brew install apktool jadx dex2jar apkeep"
+  echo "  brew install --cask android-commandlinetools   # provides sdkmanager"
+  echo "  sdkmanager \"build-tools;34.0.0\"                 # provides apksigner/zipalign/aapt2"
+  echo "  export ANDROID_HOME=\"\$(brew --prefix)/share/android-commandlinetools\""
+  return 1
+}
+
 # ---------- dispatch ----------------------------------------------------------
 sub="${1:-}"; shift || true
 case "$sub" in
+  doctor|setup) cmd_doctor "$@";;
   decode)    cmd_decode "$@";;
   build)     cmd_build "$@";;
   sign)      cmd_sign "$@";;
   verify)    cmd_verify "$@";;
   roundtrip) cmd_roundtrip "$@";;
   *) cat >&2 <<EOF
-usage: $0 <decode|build|sign|verify|roundtrip> ...
+usage: $0 <doctor|decode|build|sign|verify|roundtrip> ...
+  doctor                          # check dependencies, print install commands
   decode    <app.apk> [workdir]
   build     [workdir]
   sign      <apk> [workdir]

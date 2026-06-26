@@ -57,9 +57,17 @@ Lead with this framing so the user isn't misled, then deliver the round-trip.
 | `apksigner`,`zipalign`,`aapt2` | Android build-tools; manual sign/align, apktool's aapt2 backend |
 | `keytool` | generate a debug keystore if signing manually |
 
+**On a fresh clone, run the dependency check first** — the tools above are installed
+system-wide, not vendored in the repo, so a new machine needs them:
+
+```bash
+scripts/apk-roundtrip.sh doctor   # reports each dep (required vs optional) + exact install commands
+```
+
 If a tool is missing: `brew install apktool jadx dex2jar`; Android build-tools come
 from the command-line tools SDK (`sdkmanager "build-tools;34.0.0"`); uber-apk-signer
-is a release jar from github.com/patrickfav/uber-apk-signer. Build-tools live under
+is a release jar from github.com/patrickfav/uber-apk-signer (optional — signing falls
+back to the SDK build-tools if it's absent). Build-tools live under
 `$ANDROID_HOME/build-tools/<ver>/`.
 
 ## Use the bundled script — don't hand-run each step
