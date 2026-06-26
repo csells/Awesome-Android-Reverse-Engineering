@@ -26,6 +26,16 @@ c++filt _ZN7MyClass8MyMethodEi                        # demangle a C++ name
 
 `objdump` and `nm` ship with the system toolchain. `c++filt` demangles C++ symbols.
 
+## Best-effort C is already generated for you
+
+`decode`/`roundtrip` auto-decompile one ABI's `.so` files to C at
+`decoded/best-effort-c/<abi>/<lib>.so.c` using **Ghidra headless** (the bundled
+`scripts/DecompileToC.java` post-script decompiles every function), falling back to
+radare2 `pdc` if Ghidra is absent. That C is a **lossy, read-only reconstruction** — it
+does not recompile. Re-generate it after installing Ghidra with
+`scripts/apk-roundtrip.sh sources app.apk`. Everything below is for going deeper than
+that first-pass view.
+
 ## Disassemble + decompile
 
 The skill bundles a `native` subcommand for the survey step:
@@ -49,8 +59,9 @@ Tool tiers (from the awesome list), lightest to heaviest:
 - **Ghidra** (`brew install ghidra`) — the awesome-list's headline free decompiler;
   far better C output. Use it headless to batch-decompile a lib to C:
   ```bash
+  # the bundled post-script (also used by `sources`) writes every function to one .c:
   analyzeHeadless /tmp/ghproj proj -import libfoo.so \
-    -postScript DecompileToC.java -deleteProject
+    -scriptPath scripts -postScript DecompileToC.java out.c -deleteProject
   # or open the GUI: ghidraRun, import the .so, auto-analyze, read the Decompile pane.
   ```
 - **IDA Pro / Hex-Rays** — commercial, best-in-class; same idea.

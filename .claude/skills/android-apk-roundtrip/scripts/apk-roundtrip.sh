@@ -47,7 +47,99 @@ find_uber_signer() {
   return 1
 }
 
+find_ghidra_headless() {
+  if [[ -n "${GHIDRA_HEADLESS:-}" && -x "$GHIDRA_HEADLESS" ]]; then echo "$GHIDRA_HEADLESS"; return; fi
+  have analyzeHeadless && { command -v analyzeHeadless; return; }
+  local c
+  for c in \
+    "${GHIDRA_HOME:-}/support/analyzeHeadless" \
+    /opt/homebrew/Cellar/ghidra/*/libexec/support/analyzeHeadless \
+    /usr/local/Cellar/ghidra/*/libexec/support/analyzeHeadless \
+    /opt/ghidra/support/analyzeHeadless; do
+    [[ -x "$c" ]] && { echo "$c"; return; }
+  done
+  return 1
+}
+
 ensure_apktool() { have apktool || die "apktool not found (brew install apktool)"; }
+
+# Pick the richest single ABI dir to decompile (one ABI is representative — the others
+# are the same source recompiled). $1 = a lib/ root.
+pick_abi_dir() {
+  local root="$1" a
+  for a in arm64-v8a armeabi-v7a x86_64 x86; do
+    [[ -d "$root/$a" ]] && { echo "$root/$a"; return; }
+  done
+  find "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1
+}
+
+# Emit best-effort source views ALONGSIDE the smali/lib trees, for reading only:
+#   decoded/best-effort-java/    jadx Java for the whole app  (peer to smali*)
+#   decoded/best-effort-c/<abi>/ Ghidra (or radare2) C per .so (peer to lib/)
+# These are NOT recompilable and NOT part of the rebuild — apktool ignores extra
+# top-level dirs in the decoded tree, so they never reach the rebuilt APK. Best-effort:
+# a missing tool or a decompiler error is reported, never fatal.
+# $1 = apk path, $2 = decoded dir. Skip everything with ROUNDTRIP_SOURCES=0;
+# skip just the (slow) C step with ROUNDTRIP_NATIVE_C=0; force an ABI with ROUNDTRIP_C_ABI.
+gen_sources() {
+  local apk="$1" dec="$2"
+  [[ "${ROUNDTRIP_SOURCES:-1}" == "0" ]] && { echo ">> best-effort sources disabled (ROUNDTRIP_SOURCES=0)"; return 0; }
+
+  # --- Java (jadx), peer to smali* ---
+  if have jadx; then
+    local jout="$dec/best-effort-java"
+    echo ">> best-effort Java (jadx) -> $jout/sources/"
+    rm -rf "$jout"
+    jadx --no-res -d "$jout" "$apk" >/dev/null 2>&1 \
+      || echo "   (jadx reported errors — partial Java emitted, which is normal)"
+  else
+    echo ">> skipping best-effort Java — jadx not installed (brew install jadx)"
+  fi
+
+  # --- C (Ghidra, else radare2), peer to lib/ ---
+  [[ "${ROUNDTRIP_NATIVE_C:-1}" == "0" ]] && { echo ">> best-effort C disabled (ROUNDTRIP_NATIVE_C=0)"; return 0; }
+  [[ -d "$dec/lib" ]] || return 0
+  local abidir
+  if [[ -n "${ROUNDTRIP_C_ABI:-}" && -d "$dec/lib/$ROUNDTRIP_C_ABI" ]]; then
+    abidir="$dec/lib/$ROUNDTRIP_C_ABI"
+  else
+    abidir="$(pick_abi_dir "$dec/lib")"
+  fi
+  [[ -n "$abidir" && -d "$abidir" ]] || return 0
+  local abi; abi="$(basename "$abidir")"
+  local cout="$dec/best-effort-c/$abi"; mkdir -p "$cout"
+  local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local gh so base
+  if gh="$(find_ghidra_headless)"; then
+    echo ">> best-effort C (Ghidra headless, $abi only) -> $cout/"
+    local proj; proj="$(mktemp -d)"
+    for so in "$abidir"/*.so; do
+      [[ -f "$so" ]] || continue
+      base="$(basename "$so")"
+      echo "   decompiling $base … (slow; Ghidra analyzes then decompiles)"
+      "$gh" "$proj" "ghp_$base" -import "$so" \
+        -scriptPath "$here" -postScript DecompileToC.java "$cout/$base.c" \
+        -deleteProject -analysisTimeoutPerFile 600 >/dev/null 2>&1 \
+        || echo "      (Ghidra failed on $base — skipped)"
+    done
+    rm -rf "$proj"
+  elif have r2; then
+    echo ">> best-effort C (radare2 pseudo-C, $abi only; install Ghidra for better C) -> $cout/"
+    for so in "$abidir"/*.so; do
+      [[ -f "$so" ]] || continue
+      base="$(basename "$so")"
+      echo "   pseudo-decompiling $base …"
+      { echo "// Best-effort pseudo-C (radare2 pdc) of $base — APPROXIMATE, not recompilable."
+        echo "// Install Ghidra (brew install ghidra) and re-run '$0 sources <apk>' for better C."
+        echo
+        r2 -q -e scr.color=0 -A -c 'pdc @@f' "$so" 2>/dev/null
+      } > "$cout/$base.c" || true
+    done
+  else
+    echo ">> skipping best-effort C — neither Ghidra nor radare2 installed"
+    rmdir "$cout" 2>/dev/null || true
+  fi
+}
 
 # ---------- subcommands -------------------------------------------------------
 workdir_for() { # $1 = apk path
@@ -62,7 +154,16 @@ cmd_decode() {
   mkdir -p "$wd"
   echo ">> decoding $apk -> $wd/decoded"
   apktool d -f -o "$wd/decoded" "$apk"
+  gen_sources "$apk" "$wd/decoded"
   echo ">> decoded. Edit smali/res under $wd/decoded, then: $0 build $wd"
+  echo "   (read-only views: $wd/decoded/best-effort-java/, $wd/decoded/best-effort-c/)"
+}
+
+cmd_sources() {
+  local apk="$1"; [[ -f "$apk" ]] || die "no such apk: $apk"
+  local wd; wd="$(workdir_for "$apk" "${2:-}")"
+  [[ -d "$wd/decoded" ]] || die "no decoded tree at $wd/decoded (run decode first)"
+  gen_sources "$apk" "$wd/decoded"
 }
 
 cmd_build() {
@@ -247,7 +348,12 @@ cmd_doctor() {
   fi
 
   if have jadx; then echo "  [ok]       jadx         $(jadx --version 2>&1 | head -1)"
-  else echo "  [optional] jadx         read-only Java view for analysis — brew install jadx"; fi
+  else echo "  [optional] jadx         best-effort Java view (decoded/best-effort-java) — brew install jadx"; fi
+
+  local gh
+  if gh="$(find_ghidra_headless)"; then echo "  [ok]       ghidra       $gh"
+  else echo "  [optional] ghidra       best-effort C for native libs (decoded/best-effort-c) — brew install ghidra"
+       echo "                          (radare2 is used as a lower-quality fallback if Ghidra is absent)"; fi
 
   if have d2j-dex2jar; then echo "  [ok]       dex2jar      present"
   else echo "  [optional] dex2jar      DEX<->JAR helper — brew install dex2jar"; fi
@@ -273,16 +379,18 @@ sub="${1:-}"; shift || true
 case "$sub" in
   doctor|setup) cmd_doctor "$@";;
   native)    cmd_native "$@";;
+  sources)   cmd_sources "$@";;
   decode)    cmd_decode "$@";;
   build)     cmd_build "$@";;
   sign)      cmd_sign "$@";;
   verify)    cmd_verify "$@";;
   roundtrip) cmd_roundtrip "$@";;
   *) cat >&2 <<EOF
-usage: $0 <doctor|native|decode|build|sign|verify|roundtrip> ...
+usage: $0 <doctor|native|sources|decode|build|sign|verify|roundtrip> ...
   doctor                          # check dependencies, print install commands
   native    <app.apk> [func]      # survey native .so libs + JNI symbols (apktool can't decompile these)
-  decode    <app.apk> [workdir]
+  sources   <app.apk> [workdir]   # (re)generate best-effort Java+C views in decoded/best-effort-*
+  decode    <app.apk> [workdir]   # decode also auto-generates best-effort Java+C views
   build     [workdir]
   sign      <apk> [workdir]
   verify    <app.apk> [workdir]
