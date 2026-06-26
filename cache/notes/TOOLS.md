@@ -18,6 +18,7 @@ Environment captured on host: macOS (darwin 25.5), Apple Silicon, Homebrew at /o
 | keytool | JDK | `/usr/bin/keytool` | Generate debug keystore |
 | radare2 | (brew) | `r2`, `rabin2` | **Native** `.so` disassembly + pseudo-decompile (`pdc`) |
 | Ghidra | 12.1.2 | `ghidraRun`, `analyzeHeadless` | **Native** ARM64/x86 → C decompiler (headless via `GhidraDecompile.java`) |
+| ddisasm + gtirb-pprinter | 1.9.4 / 2.2.4 (Docker `grammatech/ddisasm`) | `scripts/native-roundtrip.sh` | **Native round-trip**: reassemblable disassembly → working `.so` |
 | objdump / nm / c++filt | system | `/usr/bin/objdump` | ELF symbols / demangle C++ names in `.so` |
 
 **Native code note:** apktool does NOT decompile `lib/<abi>/*.so`. App logic in C/C++

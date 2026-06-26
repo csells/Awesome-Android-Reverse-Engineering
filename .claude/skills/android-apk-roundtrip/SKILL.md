@@ -114,8 +114,12 @@ Env overrides if auto-discovery fails:
   To actually reverse-engineer native code you need a separate disassembler/
   decompiler — see `references/native-code.md` (objdump/radare2/Ghidra), or run
   `scripts/apk-roundtrip.sh native <app.apk>` to list the libs and dump their exported
-  JNI symbols. Editing a native `.so` then rebuilding still round-trips, but the edit
-  itself is binary patching, not smali.
+  JNI symbols. Native code *can* also be round-tripped (decompile **and** recompile),
+  but not via decompiled C (that's lossy/one-way) — the round-trippable layer is
+  reassemblable disassembly: `scripts/native-roundtrip.sh libfoo.so` uses ddisasm +
+  gtirb-pprinter to rebuild a working `.so` (functionally equivalent, not byte-identical).
+  Editing a native `.so` and repackaging into the APK still round-trips too, but that
+  edit is binary patching, not smali.
 - After editing, run `build` then `sign`. To confirm a change landed, inspect the
   rebuilt APK, e.g. `aapt2 dump badging signed.apk` for manifest/label changes.
 

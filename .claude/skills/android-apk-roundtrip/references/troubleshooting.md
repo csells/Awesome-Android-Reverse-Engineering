@@ -44,8 +44,7 @@ OBB assets). To work with one:
 3. Re-sign **every** split with the **same** key (uber-apk-signer accepts a directory:
    `java -jar uber-apk-signer.jar -a bundle/`).
 4. Install all of them together: `adb install-multiple bundle/*.apk`.
-A single standalone APK (most older/simple apps, like the Backgammon test app) needs
-none of this.
+A single standalone APK (most older/simple apps) needs none of this.
 
 ## Obfuscation & "the Java is unreadable"
 
