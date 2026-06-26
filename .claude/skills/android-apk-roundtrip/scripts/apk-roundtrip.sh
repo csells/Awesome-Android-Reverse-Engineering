@@ -169,6 +169,44 @@ cmd_roundtrip() {
   echo "signed:   $(ls "$wd"/signed/*.apk 2>/dev/null | grep -iv idsig | head -1)"
 }
 
+cmd_native() {
+  # Survey native .so libraries in an APK (or a decoded workdir) — the part apktool
+  # copies verbatim and does NOT decompile. Lists libs, then for each ARM64 lib dumps
+  # exported JNI/symbol names, and pseudo-decompiles a named function if asked.
+  local target="$1"; [[ -n "$target" ]] || die "usage: $0 native <app.apk|workdir> [funcAddrOrName]"
+  local fn="${2:-}"
+  local tmp libs
+  if [[ -f "$target" ]]; then
+    local apkabs; apkabs="$(cd "$(dirname "$target")" && pwd)/$(basename "$target")"
+    tmp="$(dirname "$apkabs")/.native-$$"; mkdir -p "$tmp"
+    trap '[[ -n "${tmp:-}" ]] && rm -rf "$tmp"' RETURN   # always clean up the extraction
+    ( cd "$tmp" && unzip -oq "$apkabs" 'lib/*' 2>/dev/null ) || true
+    libs="$tmp/lib"
+  elif [[ -d "$target/decoded/lib" ]]; then libs="$target/decoded/lib"
+  elif [[ -d "$target/lib" ]]; then libs="$target/lib"
+  else die "no native libs found under $target"; fi
+
+  echo ">> native libraries (copied verbatim by apktool — NOT decompiled):"
+  find "$libs" -name '*.so' -exec ls -la {} + 2>/dev/null | awk '{print "   ", $5, $NF}'
+  local arm64; arm64=$(find "$libs" -path '*arm64-v8a*' -name '*.so' | sort)
+  for so in $arm64; do
+    echo; echo ">> $(basename "$so") — exported JNI entry points:"
+    objdump -T "$so" 2>/dev/null | grep -oE 'Java_[A-Za-z0-9_]+' | sort -u | sed 's/^/     /' | head -40
+    local n; n=$(objdump -T "$so" 2>/dev/null | grep -c ' g  *DF .text')
+    echo "     ($n total exported functions; full C++ symbol map: objdump -T '$so')"
+  done
+  if [[ -n "$fn" ]]; then
+    have r2 || die "radare2 not installed (brew install radare2) — needed to decompile"
+    local so1; so1=$(echo "$arm64" | head -1)
+    echo; echo ">> pseudo-decompile of '$fn' in $(basename "$so1"):"
+    r2 -q -e scr.color=0 -A -c "s $fn; af; pdc" "$so1" 2>/dev/null
+  else
+    echo; echo ">> to decompile a function: $0 native $target <addr|sym>   (needs radare2)"
+    echo "   for full C pseudocode use Ghidra; see references/native-code.md"
+  fi
+  [[ -n "${tmp:-}" ]] && rm -rf "$tmp"
+}
+
 cmd_doctor() {
   local missing_required=0
   echo "apk-roundtrip doctor — checking dependencies for a fresh machine"
@@ -234,14 +272,16 @@ cmd_doctor() {
 sub="${1:-}"; shift || true
 case "$sub" in
   doctor|setup) cmd_doctor "$@";;
+  native)    cmd_native "$@";;
   decode)    cmd_decode "$@";;
   build)     cmd_build "$@";;
   sign)      cmd_sign "$@";;
   verify)    cmd_verify "$@";;
   roundtrip) cmd_roundtrip "$@";;
   *) cat >&2 <<EOF
-usage: $0 <doctor|decode|build|sign|verify|roundtrip> ...
+usage: $0 <doctor|native|decode|build|sign|verify|roundtrip> ...
   doctor                          # check dependencies, print install commands
+  native    <app.apk> [func]      # survey native .so libs + JNI symbols (apktool can't decompile these)
   decode    <app.apk> [workdir]
   build     [workdir]
   sign      <apk> [workdir]

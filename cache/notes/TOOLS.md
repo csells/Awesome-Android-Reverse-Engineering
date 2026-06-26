@@ -16,6 +16,13 @@ Environment captured on host: macOS (darwin 25.5), Apple Silicon, Homebrew at /o
 | aapt2 | 2.19 | SDK build-tools | Resource packaging (apktool backend) |
 | adb | 1.0.41 | `/opt/homebrew/bin/adb` | Pull installed APKs, install test build |
 | keytool | JDK | `/usr/bin/keytool` | Generate debug keystore |
+| radare2 | (brew) | `r2`, `rabin2` | **Native** `.so` disassembly + pseudo-decompile (`pdc`) |
+| Ghidra | 12.1.2 | `ghidraRun`, `analyzeHeadless` | **Native** ARM64/x86 → C decompiler (headless via `GhidraDecompile.java`) |
+| objdump / nm / c++filt | system | `/usr/bin/objdump` | ELF symbols / demangle C++ names in `.so` |
+
+**Native code note:** apktool does NOT decompile `lib/<abi>/*.so`. App logic in C/C++
+(e.g. the Backgammon AI engine) needs the bottom three tools — separate from the
+smali round-trip. See the skill's `references/native-code.md`.
 
 Android SDK: `/opt/homebrew/share/android-commandlinetools` (ANDROID_HOME).
 Build-tools available: **34.0.0** and **37.0.0**. Add to PATH:
