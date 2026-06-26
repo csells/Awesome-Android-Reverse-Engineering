@@ -3,8 +3,8 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "I've got an APK at ~/Downloads/game.apk — decompile it into something I can edit and then recompile back into an installable APK, and prove the round-trip is faithful.",
-      "expected_output": "Decoded smali+resource tree produced; rebuilt+signed APK that passes apksigner verify (v1/v2/v3); verify step shows AndroidManifest IDENTICAL and all smali trees IDENTICAL or content-equivalent; honest explanation that a bit-identical APK is impossible without the original signing key.",
+      "prompt": "I've got an APK at ~/Downloads/game.apk — decompile it into something I can edit and then recompile back into an installable APK.",
+      "expected_output": "Decoded smali+resource tree produced; apktool b recompiles cleanly (clean exit = success); rebuilt APK signed and the signer's own signature check passes (v1/v2/v3), so it is installable; success is judged by the tools' exit codes plus install/run, NOT by re-decoding the rebuild and diffing it against the original; honest note that a bit-identical APK is impossible without the developer's signing key and that this doesn't matter for a working rebuild.",
       "files": []
     },
     {
@@ -26,5 +26,5 @@
       "files": []
     }
   ],
-  "notes": "Skill is APK-agnostic; these prompts use placeholder paths. Validated end-to-end on a real published game APK: smali round-trip => apksigner verify OK (v1/v2/v3) and re-decode diff IDENTICAL/content-equivalent; native round-trip => reassembled .so with identical exports/JNI/DT_NEEDED, loaded and ran on a device."
+  "notes": "Skill is APK-agnostic; these prompts use placeholder paths. Success is defined by the toolchain's exit codes (apktool b + signer succeed) plus install-and-run behavior — there is no re-decode/diff 'verify' step, since that only re-tests apktool's own fidelity, not the user's edit. Validated end-to-end on a real published game APK: edited smali recompiled and signed cleanly, installed, and ran with the change in effect. Native round-trip (native-roundtrip.sh) is a separate path: ddisasm reassembly is genuinely unreliable (unlike apktool/aapt2), so its load-and-run check is a real sanity test, not toolchain self-test."
 }

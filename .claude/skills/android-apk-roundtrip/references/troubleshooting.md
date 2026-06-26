@@ -56,13 +56,18 @@ only makes *understanding* harder. Aids from the awesome list:
 - For string decryption, dynamic tools (Frida/objection) or `simplify` /
   `TinySmaliEmulator` can help, but that's analysis, not part of rebuilding.
 
-## Reproducibility: reducing diffs
+## "Did my edit work?" — the only check that matters
 
-A bit-identical APK is impossible without the original signing key and exact dexer.
-To get the cleanest possible self-consistent round-trip:
-- Decode on a **case-sensitive** filesystem to remove the `Foo.smali`/`Foo.1.smali`
-  case-collision filename churn (macOS APFS is case-insensitive by default).
-- Keep the same apktool and build-tools versions across decode and rebuild.
-- Resource element ordering inside `res/values/attrs.xml` (styleable `<flag>`/`<enum>`)
-  can reorder on re-decode — this is an apktool/aapt2 iteration-order cosmetic artifact
-  with no effect on the compiled `resources.arsc` semantics.
+Don't re-decode the rebuilt APK and diff it against the original to "prove"
+correctness — that re-tests apktool's fidelity (a property of the tool), not your
+edit. The build's pass/fail is the toolchain's exit code; the edit's pass/fail is
+behavioral:
+- `apktool b` / `apksigner` exited cleanly → the input was valid and the APK is
+  installable. An error names the exact file/line to fix.
+- Install and launch the rebuilt APK (`adb install` + `adb shell monkey -p <pkg>
+  -c android.intent.category.LAUNCHER 1`), then watch `adb logcat`. If it runs and
+  your change is in effect, you're done.
+
+A bit-identical APK is impossible anyway (you lack the developer's signing key, and
+apktool re-emits the DEX/ZIP layout) — and it doesn't matter, because the goal is a
+working rebuild, not a byte clone.

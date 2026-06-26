@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-# apk-roundtrip.sh — decompile an APK to an editable, recompilable form and
-# rebuild it into an installable, signature-verified APK, then prove the
-# decoded form is a complete recompilable representation via a self-consistent
-# re-decode diff.
+# apk-roundtrip.sh — decompile an APK to an editable form, let you edit it, and
+# recompile it into an installable, signed APK.
+#
+# Whether it "worked" is decided by the tools in the pipeline: if apktool/aapt2
+# recompile the edited tree cleanly and the signer produces a verified APK, the
+# build is good. The real test of an EDIT is behavioral — install the result and
+# run it. There is deliberately no re-decode "verify" step: diffing a rebuild
+# against the original only re-tests apktool's own fidelity (a property of the
+# tool, like a C compiler's, not of your work), so it tells you nothing useful.
 #
 # Subcommands:
-#   decode   <app.apk> [workdir]      apktool d  -> <workdir>/decoded
-#   build    [workdir]                apktool b  -> <workdir>/rebuilt-unsigned.apk
-#   sign     <apk> [workdir]          zipalign + sign (v1/v2/v3) + verify
-#   verify   <app.apk> [workdir]      re-decode rebuilt & diff vs original decode
-#   roundtrip <app.apk> [workdir]     decode -> build -> sign -> verify (full run)
+#   decode    <app.apk> [workdir]     apktool d  -> <workdir>/decoded
+#   build     [workdir]               apktool b  -> <workdir>/rebuilt-unsigned.apk
+#   sign      <apk> [workdir]         zipalign + sign (v1/v2/v3) + signature check
+#   roundtrip <app.apk> [workdir]     decode -> build -> sign (full run)
+#   native    <app.apk> [func]        survey native .so libs (apktool can't decompile these)
+#   sources   <app.apk> [workdir]     (re)generate best-effort Java+C reading views
+#   doctor                            check dependencies, print install commands
 #
 # Defaults: workdir = ./<apkbasename>-work
 # Env overrides: BUILD_TOOLS=/path/to/build-tools/<ver>  UBER_SIGNER=/path/to/uber-apk-signer.jar
@@ -203,71 +210,24 @@ cmd_sign() {
   ls -la "$out"/*.apk
 }
 
-cmd_verify() {
-  local apk="$1"; [[ -f "$apk" ]] || die "no such apk: $apk"
-  local wd; wd="$(workdir_for "$apk" "${2:-}")"
-  [[ -d "$wd/decoded" ]] || die "no original decode at $wd/decoded (run decode/roundtrip first)"
-  ensure_apktool
-  local signed
-  signed=$(ls -1 "$wd"/signed/*.apk 2>/dev/null | grep -iv idsig | head -1 || true)
-  [[ -n "$signed" ]] || die "no signed APK in $wd/signed (run sign first)"
-  echo ">> re-decoding rebuilt $signed -> $wd/redecoded"
-  apktool d -f -o "$wd/redecoded" "$signed" >/dev/null
-  echo ">> diffing decoded vs redecoded ..."
-  local fails=0
-  # manifest
-  if diff -q "$wd/decoded/AndroidManifest.xml" "$wd/redecoded/AndroidManifest.xml" >/dev/null; then
-    echo "  AndroidManifest.xml : IDENTICAL"
-  else
-    echo "  AndroidManifest.xml : DIFFERS"; fails=$((fails+1))
-  fi
-  # smali trees
-  for d in "$wd"/decoded/smali*; do
-    [[ -d "$d" ]] || continue
-    local name; name="$(basename "$d")"
-    local other="$wd/redecoded/$name"
-    if [[ ! -d "$other" ]]; then echo "  $name : MISSING in rebuild"; fails=$((fails+1)); continue; fi
-    if diff -rq "$d" "$other" >/dev/null 2>&1; then
-      echo "  $name : IDENTICAL"
-    else
-      # Filenames may differ on case-insensitive filesystems (macOS/APFS), where
-      # obfuscated classes that differ only by case (IE vs Ie) collide and apktool
-      # appends a .1/.2 suffix to disambiguate. That is purely an on-disk artifact:
-      # smali names a class by its `.class` directive, not its filename, so the
-      # compiled DEX is unaffected. The filesystem-independent invariant is the SET
-      # of `.class` directives plus the concatenated, name-sorted file contents.
-      local a b
-      a=$(grep -rhE '^\.class' "$d"      2>/dev/null | sort)
-      b=$(grep -rhE '^\.class' "$other"  2>/dev/null | sort)
-      # also compare full normalized content (every file's body, independent of filename)
-      local ca cb
-      ca=$(find "$d"     -name '*.smali' -exec cat {} + 2>/dev/null | sort | shasum -a 256 | cut -d' ' -f1)
-      cb=$(find "$other" -name '*.smali' -exec cat {} + 2>/dev/null | sort | shasum -a 256 | cut -d' ' -f1)
-      if [[ "$a" == "$b" && "$ca" == "$cb" ]]; then
-        echo "  $name : equivalent (identical class set & content; only case-insensitive-FS filenames differ)"
-      else
-        echo "  $name : DIFFERS"
-        diff <(echo "$a") <(echo "$b") | head -6 | sed 's/^/      /'
-        fails=$((fails+1))
-      fi
-    fi
-  done
-  echo ">> round-trip verification: $([[ $fails -eq 0 ]] && echo 'PASS (faithful, self-consistent)' || echo "REVIEW ($fails real diffs)")"
-  return 0
-}
-
 cmd_roundtrip() {
   local apk="$1"; [[ -f "$apk" ]] || die "no such apk: $apk"
   local wd; wd="$(workdir_for "$apk" "${2:-}")"
   cmd_decode "$apk" "$wd"
   cmd_build "$wd"
   cmd_sign "$wd/rebuilt-unsigned.apk" "$wd"
-  cmd_verify "$apk" "$wd"
+  local signed; signed="$(ls "$wd"/signed/*.apk 2>/dev/null | grep -iv idsig | head -1)"
   echo
-  echo "=== round-trip complete ==="
+  echo "=== recompile complete (apktool + signer exited clean) ==="
   echo "workdir:  $wd"
-  echo "editable: $wd/decoded   (edit smali/res here, re-run: $0 build $wd && $0 sign $wd/rebuilt-unsigned.apk $wd)"
-  echo "signed:   $(ls "$wd"/signed/*.apk 2>/dev/null | grep -iv idsig | head -1)"
+  echo "editable: $wd/decoded   (edit smali/res here, then: $0 build $wd && $0 sign $wd/rebuilt-unsigned.apk $wd)"
+  echo "signed:   $signed"
+  echo
+  echo "The tools recompiled and signed cleanly. To confirm an EDIT actually took"
+  echo "effect, install and run it (this is the only verification that matters):"
+  echo "  pkg=\$(aapt2 dump badging \"$apk\" | sed -n \"s/.*package: name='\\([^']*\\)'.*/\\1/p\")"
+  echo "  adb uninstall \"\$pkg\"; adb install \"$signed\""
+  echo "  adb shell monkey -p \"\$pkg\" -c android.intent.category.LAUNCHER 1"
 }
 
 cmd_native() {
@@ -363,7 +323,7 @@ cmd_doctor() {
 
   echo
   if [[ $missing_required -eq 0 ]]; then
-    echo "All REQUIRED tools present — decode / build / sign / verify will work."
+    echo "All REQUIRED tools present — decode / build / sign will work."
     return 0
   fi
   echo "Missing REQUIRED tool(s) above. One-shot setup on macOS (Homebrew):"
@@ -383,18 +343,19 @@ case "$sub" in
   decode)    cmd_decode "$@";;
   build)     cmd_build "$@";;
   sign)      cmd_sign "$@";;
-  verify)    cmd_verify "$@";;
   roundtrip) cmd_roundtrip "$@";;
   *) cat >&2 <<EOF
-usage: $0 <doctor|native|sources|decode|build|sign|verify|roundtrip> ...
+usage: $0 <doctor|native|sources|decode|build|sign|roundtrip> ...
   doctor                          # check dependencies, print install commands
   native    <app.apk> [func]      # survey native .so libs + JNI symbols (apktool can't decompile these)
   sources   <app.apk> [workdir]   # (re)generate best-effort Java+C views in decoded/best-effort-*
   decode    <app.apk> [workdir]   # decode also auto-generates best-effort Java+C views
-  build     [workdir]
-  sign      <apk> [workdir]
-  verify    <app.apk> [workdir]
-  roundtrip <app.apk> [workdir]   # full pipeline
+  build     [workdir]             # apktool b; a clean exit means the recompile succeeded
+  sign      <apk> [workdir]       # zipalign + sign; a clean exit means the APK is installable
+  roundtrip <app.apk> [workdir]   # full pipeline (decode -> build -> sign)
+
+The build's success/failure is the toolchain's exit code; the test of an EDIT is
+to install the signed APK and run it. There is no re-decode "verify" step.
 EOF
      exit 2;;
 esac

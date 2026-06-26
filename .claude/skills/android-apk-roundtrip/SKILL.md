@@ -2,49 +2,47 @@
 name: android-apk-roundtrip
 description: >-
   Decompile an Android APK into a fully editable, recompilable form (smali +
-  decoded resources) and rebuild it into an installable, signature-verified APK,
-  with a round-trip reproducibility check proving the decoded form is a complete
-  recompilable representation. Use this whenever the user wants to decompile,
-  disassemble, reverse engineer, unpack, mod, patch, edit, rebuild, recompile,
-  repackage, or re-sign an .apk (or .xapk/.apks) — including "decompile this APK
-  so it can be recompiled to the same binary", "edit the smali and rebuild",
-  "patch an Android app and reinstall it", "make a modded APK", or "verify an APK
-  round-trips". Also use when comparing an original vs rebuilt APK or diagnosing
-  why a rebuilt APK won't install. Built around apktool, with jadx/dex2jar for
-  source-level reading and uber-apk-signer / Android build-tools for signing.
+  decoded resources), edit it, and rebuild it into an installable, signed APK
+  that runs with your changes in place. Use this whenever the user wants to
+  decompile, disassemble, reverse engineer, unpack, mod, patch, edit, rebuild,
+  recompile, repackage, or re-sign an .apk (or .xapk/.apks) — including "edit the
+  smali and rebuild", "patch an Android app and reinstall it", "make a modded
+  APK", or "change a resource and recompile". Also use when diagnosing why a
+  rebuilt APK won't build, sign, install, or run. Built around apktool, with
+  jadx/dex2jar for source-level reading and uber-apk-signer / Android build-tools
+  for signing.
 ---
 
-# Android APK Round-Trip (decompile → edit → recompile → verify)
+# Android APK Round-Trip (decompile → edit → recompile → run)
 
-This skill takes an APK apart into an editable form, puts it back together into an
-installable APK, and proves the round-trip is faithful. It is the modification
-pipeline (apktool/smali), not just the read-only analysis pipeline (jadx).
+This skill takes an APK apart into an editable form, lets you edit it, and puts it
+back together into an installable APK that runs with your edits. It is the
+modification pipeline (apktool/smali), not just the read-only analysis pipeline (jadx).
 
-## First, set expectations honestly: what "same binary" really means
+## How you know it worked
 
-A user asking to "recompile to the same binary" is usually picturing a bit-for-bit
-identical APK. **That is not achievable and you should say so up front**, because:
+The signal of success is whether the **tools in the pipeline succeed or fail**, and
+then whether the edited app runs. It is **not** a re-decode diff.
 
-- The original APK is signed with the **developer's private key**, which you do not
-  have. Any rebuild must be re-signed with a different key → the signing block and
-  certificate differ by definition.
-- apktool reassembles DEX from smali. smali→DEX is faithful to the *instructions*,
-  but the original DEX was emitted by the developer's dexer (d8/R8) with its own
-  string-pool ordering, layout, and debug info. The ZIP container also re-packs with
-  different timestamps/compression/ordering. So the bytes differ even when behavior
-  is identical.
+- `apktool b` (which drives the smali assembler and aapt2) either recompiles the
+  edited tree into a DEX + resources or it errors out. A clean exit means your smali
+  and resources are valid; an error points at the exact file/line to fix.
+- `apksigner` / uber-apk-signer either produce a validly signed APK or they fail. A
+  signed APK that the signer verifies is, by definition, installable.
+- The real test of your **edit** is behavioral: install the rebuilt APK and run it.
+  If it launches and your change is in effect, you're done. If it crashes or the
+  change isn't there, you edited the wrong thing or broke the smali — fix and rebuild.
 
-What **is** achievable, and what this skill delivers, is a **faithful, self-consistent,
-installable round-trip**: the decoded tree is a *complete recompilable representation*
-of the app — rebuild it, re-decode the rebuild, and you get back the same smali and
-manifest. Verifiable success criteria:
+That is the whole verification story. **Do not** re-decode the rebuild and diff it
+against the original to "prove" fidelity — that only re-tests whether apktool
+round-trips, which is a property of the tool, not of your work. You trust the smali
+assembler and aapt2 the way you trust a C compiler; their exit codes are the answer.
 
-1. `apksigner verify` passes on the rebuilt APK (v1/v2/v3).
-2. Re-decoding the rebuilt APK yields **identical** smali class set + content and an
-   identical AndroidManifest vs the original decode.
-3. The rebuilt APK installs and the app runs.
-
-Lead with this framing so the user isn't misled, then deliver the round-trip.
+One honest caveat to state up front: a **bit-identical** APK is impossible. You don't
+have the developer's private signing key (so the signature differs by definition), and
+apktool re-emits the DEX/ZIP with its own layout. That doesn't matter — the goal is an
+installable APK that runs with your edits, not a byte clone. Say this so the user who
+asked to "recompile to the same binary" isn't misled, then deliver the working rebuild.
 
 ## The toolchain (already installed on this machine)
 
@@ -54,7 +52,7 @@ Lead with this framing so the user isn't misled, then deliver the round-trip.
 | `jadx` / `jadx-gui` | read-only Java decompilation; auto-run on decode → `best-effort-java/` |
 | `ghidra` (headless) | read-only C decompilation of native `.so`; auto-run → `best-effort-c/` |
 | `d2j-dex2jar` (dex2jar) | DEX→JAR for use with Java decompilers; alt smali path |
-| `uber-apk-signer.jar` | one-shot zipalign + sign (v1/v2/v3) + verify, auto debug key |
+| `uber-apk-signer.jar` | one-shot zipalign + sign (v1/v2/v3) + signature check, auto debug key |
 | `apksigner`,`zipalign`,`aapt2` | Android build-tools; manual sign/align, apktool's aapt2 backend |
 | `keytool` | generate a debug keystore if signing manually |
 
@@ -74,11 +72,11 @@ back to the SDK build-tools if it's absent). Build-tools live under
 ## Use the bundled script — don't hand-run each step
 
 The whole pipeline is repetitive and easy to get subtly wrong (forgetting to align
-before signing, diffing the wrong trees). Use `scripts/apk-roundtrip.sh`, which
-auto-discovers build-tools and the signer:
+before signing). Use `scripts/apk-roundtrip.sh`, which auto-discovers build-tools and
+the signer:
 
 ```bash
-# full pipeline: decode → build → sign → verify, into <apk>-work/
+# full pipeline: decode → build → sign, into <apk>-work/
 scripts/apk-roundtrip.sh roundtrip path/to/app.apk [workdir]
 
 # or step by step (use this when the user wants to EDIT between decode and build):
@@ -86,7 +84,6 @@ scripts/apk-roundtrip.sh decode path/to/app.apk [workdir]   # -> workdir/decoded
 #   ... edit smali / res under workdir/decoded ...
 scripts/apk-roundtrip.sh build  [workdir]                   # -> workdir/rebuilt-unsigned.apk
 scripts/apk-roundtrip.sh sign   workdir/rebuilt-unsigned.apk [workdir]
-scripts/apk-roundtrip.sh verify path/to/app.apk [workdir]   # re-decode + diff vs original
 
 # (re)generate just the read-only source views, e.g. after installing Ghidra:
 scripts/apk-roundtrip.sh sources path/to/app.apk [workdir]  # -> decoded/best-effort-{java,c}/
@@ -95,10 +92,10 @@ scripts/apk-roundtrip.sh sources path/to/app.apk [workdir]  # -> decoded/best-ef
 `decode` (and therefore `roundtrip`) **automatically** emits two read-only, best-effort
 source views next to the editable trees — see *Best-effort source views* below.
 
-`verify` compares the original decode against a re-decode of the rebuilt APK. It
-reports `IDENTICAL`, or `equivalent` when the only differences are case-insensitive
-filesystem filename suffixes (see below) — confirmed by matching the full `.class`
-directive set and concatenated smali content, which are filename-independent.
+If `build` exits cleanly the recompile succeeded; if `sign` exits cleanly you have an
+installable APK. Those exit codes are the build's pass/fail — then install and run it
+to confirm your edit (see *Installing / running the result*). There is no `verify`
+subcommand: re-decoding the rebuild and diffing it only re-tests apktool, not your work.
 
 Env overrides if auto-discovery fails:
 `BUILD_TOOLS=/path/to/build-tools/<ver>` and `UBER_SIGNER=/path/to/uber-apk-signer.jar`.
@@ -154,25 +151,28 @@ Notes:
   gtirb-pprinter to rebuild a working `.so` (functionally equivalent, not byte-identical).
   Editing a native `.so` and repackaging into the APK still round-trips too, but that
   edit is binary patching, not smali.
-- After editing, run `build` then `sign`. To confirm a change landed, inspect the
-  rebuilt APK, e.g. `aapt2 dump badging signed.apk` for manifest/label changes.
+- After editing, run `build` then `sign`. If `apktool b` errors, the recompile failed
+  and the message names the file/line; fix it and rebuild.
 
-## Installing / running the result
+## Installing / running the result — this is the actual test
 
-- The rebuilt APK is signed with a **debug** key, so it will NOT update a Play Store
-  install of the same package (signature mismatch). To test on a device/emulator:
-  `adb uninstall <package>` first, then `adb install workdir/signed/*-debugSigned.apk`.
-- Get the package name with `aapt2 dump badging app.apk | grep package`.
+This is where you confirm the edit worked. A clean `build`/`sign` only means the tools
+accepted the input; it does not prove your change does what you intended. Put it on a
+device/emulator and look:
 
-## The case-insensitive-filesystem caveat (macOS)
+```bash
+pkg=$(aapt2 dump badging app.apk | sed -n "s/.*package: name='\([^']*\)'.*/\1/p")
+adb uninstall "$pkg"                      # the rebuild is debug-signed; a differently-
+                                          # signed copy (e.g. Play Store) blocks the install
+adb install workdir/signed/*-debugSigned.apk
+adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1   # launch it
+adb logcat -d | grep -iE 'fatal|androidruntime'                   # did it crash on start?
+```
 
-On macOS (APFS, case-insensitive by default), obfuscated classes whose names differ
-only by case — e.g. `IE` and `Ie` — map to the same filename, so apktool writes one as
-`IE.smali` and the colliding one as `IE.1.smali`. Which member gets the `.1` suffix can
-flip on re-decode, producing filename-only diffs. This is cosmetic: the `.class`
-directive inside each file carries the true class name, so the compiled DEX is correct.
-The `verify` step accounts for this. To eliminate even the cosmetic diff, decode on a
-**case-sensitive** volume (e.g. a case-sensitive APFS disk image).
+If it launches and your change is in effect, the round-trip succeeded. That — not a
+re-decode diff — is the verification that matters. The rebuilt APK is signed with a
+**debug** key, so it will not update a Play Store install of the same package; that's
+why the `adb uninstall` comes first.
 
 ## Troubleshooting
 
